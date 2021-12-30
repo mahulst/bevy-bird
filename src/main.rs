@@ -1,7 +1,10 @@
 #![warn(clippy::all, clippy::pedantic)]
 
 use bevy::app::AppExit;
+use bevy::core::FixedTimestep;
 use bevy::prelude::*;
+use rand::{thread_rng, Rng};
+
 
 enum Actions {
     Start,
@@ -12,6 +15,7 @@ struct ActionButton(Actions);
 struct MenuItem;
 struct GameOver;
 struct GameComponent;
+struct Obstacle;
 struct Camera;
 
 struct ButtonMaterials {
@@ -87,6 +91,12 @@ fn main() {
         )
         .add_system_set(
             SystemSet::on_update(AppState::Playing)
+                .with_run_criteria(FixedTimestep::step(2.))
+                .with_system(spawn_obstacles.system()),
+        )
+        .add_system_set(
+            SystemSet::on_update(AppState::Playing)
+                .with_system(move_obstacles.system())
                 .with_system(move_player.system())
                 .with_system(player_death.system())
                 .with_system(gravity.system())
@@ -94,6 +104,65 @@ fn main() {
         )
         .run();
 }
+
+fn spawn_obstacles(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let mut rng = thread_rng();
+    let y = rng.gen_range(0.0..4.0) as f32;
+    dbg!(y);
+    commands
+        .spawn_bundle(PbrBundle {
+            transform: Transform {
+                translation: Vec3::new(2., y, 0.),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert(GameComponent)
+        .insert(Obstacle)
+        .insert(Velocity(Vec2::new(-2., 0.)))
+        .with_children(|parent| {
+            parent.spawn_bundle(spawn_single_obstacle(ObstacleType::Up, &mut meshes, &mut materials));
+            parent.spawn_bundle(spawn_single_obstacle(
+                ObstacleType::Down,
+                &mut meshes,
+                &mut materials,
+            ));
+        });
+}
+
+#[derive(PartialEq)]
+enum ObstacleType {
+    Up,
+    Down,
+}
+fn spawn_single_obstacle(
+    o_type: ObstacleType,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<StandardMaterial>>,
+) -> PbrBundle {
+    let pos = if o_type == ObstacleType::Up {
+        Vec3::new(
+            12., 6., 0.)
+    } else {
+        Vec3::new(12., 1., 0.)
+    };
+
+    PbrBundle {
+        mesh: meshes.add(Mesh::from(shape::Cube { size: 1. })),
+        material: materials.add(Color::rgb(0., 0., 1.).into()),
+        transform: Transform {
+            translation: pos,
+            scale: Vec3::new(1., 4., 1.),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
 fn player_death(mut state: ResMut<State<AppState>>, query: Query<(&Transform), (With<Player>)>) {
     if let Ok((tf)) = query.single() {
         if tf.translation.y < 0.5 {
@@ -124,6 +193,13 @@ fn move_player(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity), (W
     }
 }
 
+fn move_obstacles(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity), (With<Obstacle>)>) {
+    let time_delta = time.delta_seconds();
+    for (mut transform, velocity) in query.iter_mut() {
+        transform.translation.x += time_delta * velocity.0.x;
+    }
+}
+
 fn setup_game(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -142,7 +218,7 @@ fn setup_game(
 
     commands
         .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Plane { size: 1. })),
+            mesh: meshes.add(Mesh::from(shape::Plane { size: 128. })),
             material: materials.add(Color::rgb(0., 0.8, 0.).into()),
             transform: Transform {
                 translation: Vec3::new(0., 0., 0.),
@@ -221,6 +297,7 @@ fn menu(
 }
 
 fn display_game_over(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.spawn_bundle(UiCameraBundle::default());
     commands
         .spawn_bundle(TextBundle {
             text: Text::with_section(
@@ -232,16 +309,15 @@ fn display_game_over(mut commands: Commands, asset_server: Res<AssetServer>) {
                     ..Default::default()
                 },
                 TextAlignment {
-                    horizontal: HorizontalAlign::Center,
+                    horizontal: HorizontalAlign::Right,
                     ..Default::default()
                 },
             ),
             style: Style {
-                align_self: AlignSelf::Center,
                 position_type: PositionType::Absolute,
                 position: Rect {
                     top: Val::Px(5.0),
-                    left: Val::Auto,
+                    left: Val::Percent(50.),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -317,3 +393,20 @@ fn setup_menu(
         .insert(ActionButton(Actions::Exit))
         .insert(MenuItem);
 }
+
+// TODO:
+// Moving obstacles
+// Die when touch obstacles
+// Ceiling
+// Body rotation
+// Scoring
+
+// Optional:
+// iOS
+// High scores
+// Sound
+
+// Questions:
+// Render pipelines -> How to sort draw order for different components -> best practices -> documentation
+// Ui, multiple systems to add -> positioning row vs column
+//
