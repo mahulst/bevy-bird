@@ -3,14 +3,14 @@
 use bevy::app::AppExit;
 use bevy::core::FixedTimestep;
 use bevy::prelude::*;
+use bevy_rapier3d::prelude::*;
 use rand::{thread_rng, Rng};
-
 
 enum Actions {
     Start,
     Exit,
 }
-
+struct LastObstacleSpawned(f64);
 struct ActionButton(Actions);
 struct MenuItem;
 struct GameOver;
@@ -60,17 +60,24 @@ struct Player;
 struct Velocity(Vec2);
 
 const GRAVITY: f32 = 3.1;
-const FLY_SPEED: f32 = 1.;
-const MAX_FLY_SPEED: f32 = 2.;
+const FLY_SPEED: f32 = 2.;
+const MAX_FLY_SPEED: f32 = 2.8;
 
 fn main() {
     App::build()
+        .insert_resource(LastObstacleSpawned(0.))
         .insert_resource(WindowDescriptor {
             vsync: false,
             ..Default::default()
         })
         .add_plugins(DefaultPlugins)
+        .add_plugin(RapierPhysicsPlugin::<NoUserData>::default())
+        .insert_resource(RapierConfiguration {
+            gravity: -Vector::y() * 4.8,
+            ..Default::default()
+        })
         .init_resource::<ButtonMaterials>()
+        .add_plugin(RapierRenderPlugin)
         .add_state(AppState::restart())
         .add_system(bevy::input::system::exit_on_esc_system.system())
         .add_system(menu.system())
@@ -78,6 +85,7 @@ fn main() {
         .add_system_set(
             SystemSet::on_enter(AppState::End)
                 .with_system(setup_menu.system())
+                .with_system(stop_obstacles.system())
                 .with_system(display_game_over.system()),
         )
         .add_system_set(
@@ -91,112 +99,130 @@ fn main() {
         )
         .add_system_set(
             SystemSet::on_update(AppState::Playing)
-                .with_run_criteria(FixedTimestep::step(2.))
                 .with_system(spawn_obstacles.system()),
         )
         .add_system_set(
             SystemSet::on_update(AppState::Playing)
-                .with_system(move_obstacles.system())
-                .with_system(move_player.system())
                 .with_system(player_death.system())
-                .with_system(gravity.system())
                 .with_system(fly.system()),
         )
         .run();
 }
 
+fn pause_physics(mut conf: ResMut<RapierConfiguration>) {
+    conf.physics_pipeline_active = false;
+}
+
 fn spawn_obstacles(
+    time: Res<Time>,
+    mut last_spawn: ResMut<LastObstacleSpawned>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let now = time.seconds_since_startup();
+    if now < last_spawn.0 + 2. {
+        return;
+    }
+
+    last_spawn.0 = now;
+
     let mut rng = thread_rng();
     let y = rng.gen_range(0.0..4.0) as f32;
-    dbg!(y);
     commands
-        .spawn_bundle(PbrBundle {
+        .spawn()
+        .insert(Obstacle)
+        .insert_bundle(PbrBundle {
+            mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
+            material: materials.add(Color::rgb(0., 0., 0.1).into()),
             transform: Transform {
-                translation: Vec3::new(2., y, 0.),
+                scale: Vec3::new(1., 8., 1.),
                 ..Default::default()
             },
             ..Default::default()
         })
         .insert(GameComponent)
-        .insert(Obstacle)
-        .insert(Velocity(Vec2::new(-2., 0.)))
-        .with_children(|parent| {
-            parent.spawn_bundle(spawn_single_obstacle(ObstacleType::Up, &mut meshes, &mut materials));
-            parent.spawn_bundle(spawn_single_obstacle(
-                ObstacleType::Down,
-                &mut meshes,
-                &mut materials,
-            ));
-        });
-}
-
-#[derive(PartialEq)]
-enum ObstacleType {
-    Up,
-    Down,
-}
-fn spawn_single_obstacle(
-    o_type: ObstacleType,
-    meshes: &mut ResMut<Assets<Mesh>>,
-    materials: &mut ResMut<Assets<StandardMaterial>>,
-) -> PbrBundle {
-    let pos = if o_type == ObstacleType::Up {
-        Vec3::new(
-            12., 6., 0.)
-    } else {
-        Vec3::new(12., 1., 0.)
-    };
-
-    PbrBundle {
-        mesh: meshes.add(Mesh::from(shape::Cube { size: 1. })),
-        material: materials.add(Color::rgb(0., 0., 1.).into()),
-        transform: Transform {
-            translation: pos,
-            scale: Vec3::new(1., 4., 1.),
+        .insert_bundle(RigidBodyBundle {
+            body_type: RigidBodyType::Dynamic,
+            velocity: RigidBodyVelocity {
+                linvel: Vec3::new(-2., 0., 0.).into(),
+                ..Default::default()
+            },
+            forces: RigidBodyForces {
+                gravity_scale: 0.,
+                ..Default::default()
+            },
+            damping: RigidBodyDamping {
+                linear_damping: 0.,
+                angular_damping: 0.,
+            },
+            position: Vec3::new(9., 7. + y, 0.).into(),
             ..Default::default()
-        },
-        ..Default::default()
-    }
+        })
+        .insert_bundle(ColliderBundle {
+            shape: ColliderShape::cuboid(0.5, 4., 0.5),
+            flags: ColliderFlags {
+                active_events: ActiveEvents::CONTACT_EVENTS,
+                collision_groups: InteractionGroups {
+                    memberships: 8,
+                    filter: 4,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert(ColliderPositionSync::Discrete);
+
+    commands
+        .spawn()
+        .insert(Obstacle)
+        .insert_bundle(PbrBundle {
+            mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
+            material: materials.add(Color::rgb(0., 0., 1.).into()),
+            transform: Transform {
+                scale: Vec3::new(1., 6., 1.),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert_bundle(RigidBodyBundle {
+            body_type: RigidBodyType::Dynamic,
+            velocity: RigidBodyVelocity {
+                linvel: Vec3::new(-2., 0., 0.).into(),
+                ..Default::default()
+            },
+            forces: RigidBodyForces {
+                gravity_scale: 0.,
+                ..Default::default()
+            },
+            damping: RigidBodyDamping {
+                linear_damping: 0.,
+                angular_damping: 0.,
+            },
+            position: Vec3::new(9., -1. + y, 0.).into(),
+            ..Default::default()
+        })
+        .insert(GameComponent)
+        .insert_bundle(ColliderBundle {
+            shape: ColliderShape::cuboid(0.5, 3., 0.5),
+            flags: ColliderFlags {
+                active_events: ActiveEvents::CONTACT_EVENTS,
+                collision_groups: InteractionGroups {
+                    memberships: 8,
+                    filter: 4,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert(ColliderPositionSync::Discrete);
 }
 
-fn player_death(mut state: ResMut<State<AppState>>, query: Query<(&Transform), (With<Player>)>) {
-    if let Ok((tf)) = query.single() {
-        if tf.translation.y < 0.5 {
-            state.set(AppState::game_over()).unwrap();
-        }
-    }
-}
-fn fly(input: Res<Input<KeyCode>>, mut query: Query<(&mut Velocity), (With<Player>)>) {
-    if input.pressed(KeyCode::Space) {
+fn fly(input: Res<Input<KeyCode>>, mut query: Query<(&mut RigidBodyVelocity), (With<Player>)>) {
+    if input.just_pressed(KeyCode::Space) {
         for (mut velocity) in query.iter_mut() {
-            velocity.0.y = MAX_FLY_SPEED.min(velocity.0.y + FLY_SPEED);
+            velocity.linvel.y = MAX_FLY_SPEED.min(velocity.linvel.y.max(0.) + FLY_SPEED);
         }
-    }
-}
-
-fn gravity(time: Res<Time>, mut query: Query<(&mut Velocity), (With<Player>)>) {
-    let time_delta = time.delta_seconds();
-    for (mut velocity) in query.iter_mut() {
-        velocity.0.y -= time_delta * GRAVITY;
-    }
-}
-
-fn move_player(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity), (With<Player>)>) {
-    let time_delta = time.delta_seconds();
-    for (mut transform, velocity) in query.iter_mut() {
-        transform.translation.x += time_delta * velocity.0.x;
-        transform.translation.y += time_delta * velocity.0.y;
-    }
-}
-
-fn move_obstacles(time: Res<Time>, mut query: Query<(&mut Transform, &Velocity), (With<Obstacle>)>) {
-    let time_delta = time.delta_seconds();
-    for (mut transform, velocity) in query.iter_mut() {
-        transform.translation.x += time_delta * velocity.0.x;
     }
 }
 
@@ -207,22 +233,57 @@ fn setup_game(
 ) {
     commands
         .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Cube { size: 0.1 })),
+            mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 0.1 })),
             material: materials.add(Color::rgb(0.8, 0., 0.).into()),
-            transform: Transform::from_xyz(-2.0, 5., 0.0),
             ..Default::default()
         })
         .insert(Player)
         .insert(GameComponent)
-        .insert(Velocity(Vec2::new(0., 0.)));
+        .insert_bundle(RigidBodyBundle {
+            body_type: RigidBodyType::Dynamic,
+            position: Vec3::new(-2.0, 5., 0.0).into(),
+
+            ..Default::default()
+        })
+        .insert_bundle(ColliderBundle {
+            flags: ColliderFlags {
+                active_events: ActiveEvents::CONTACT_EVENTS,
+                collision_groups: InteractionGroups {
+                    memberships: 5,
+                    filter: 10,
+                },
+                ..Default::default()
+            },
+            shape: ColliderShape::cuboid(0.05, 0.05, 0.05),
+            ..Default::default()
+        })
+        .insert(ColliderPositionSync::Discrete)
+        .insert(Velocity(Vec2::new(0., 0.)))
+        .insert(ColliderDebugRender::with_id(2));
 
     commands
         .spawn_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Plane { size: 128. })),
+            mesh: meshes.add(Mesh::from(bevy::prelude::shape::Plane { size: 128. })),
             material: materials.add(Color::rgb(0., 0.8, 0.).into()),
             transform: Transform {
                 translation: Vec3::new(0., 0., 0.),
                 scale: Vec3::new(10., 0., 10.),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert_bundle(RigidBodyBundle {
+            body_type: RigidBodyType::Static,
+            position: Vec3::new(-0.0, 0., 0.0).into(),
+            ..Default::default()
+        })
+        .insert_bundle(ColliderBundle {
+            shape: ColliderShape::cuboid(64., 0., 64.),
+            flags: ColliderFlags {
+                collision_groups: InteractionGroups {
+                    memberships: 2,
+                    filter: 1,
+                },
                 ..Default::default()
             },
             ..Default::default()
@@ -240,7 +301,7 @@ fn setup_game(
 fn setup_camera(mut commands: Commands) {
     commands
         .spawn_bundle(PerspectiveCameraBundle {
-            transform: Transform::from_xyz(0., 5., 10.).looking_at(Vec3::new(0., 4., 2.), Vec3::Y),
+            transform: Transform::from_xyz(-3., 5., 10.).looking_at(Vec3::new(0., 4., 2.), Vec3::Y),
             ..Default::default()
         })
         .insert(Camera);
@@ -284,6 +345,7 @@ fn menu(
         match *interaction {
             Interaction::Clicked => match *action {
                 ActionButton(Actions::Start) => {
+                    dbg!("play again");
                     state.set(AppState::restart()).unwrap();
                 }
                 ActionButton(Actions::Exit) => {
@@ -325,6 +387,12 @@ fn display_game_over(mut commands: Commands, asset_server: Res<AssetServer>) {
             ..Default::default()
         })
         .insert(GameOver);
+}
+
+fn stop_obstacles(mut query: Query<(&mut RigidBodyVelocity), (With<Obstacle>)>) {
+    for (mut velocity) in query.iter_mut() {
+        velocity.linvel.x = 0.;
+    }
 }
 
 fn setup_menu(
@@ -395,8 +463,6 @@ fn setup_menu(
 }
 
 // TODO:
-// Moving obstacles
-// Die when touch obstacles
 // Ceiling
 // Body rotation
 // Scoring
@@ -409,4 +475,11 @@ fn setup_menu(
 // Questions:
 // Render pipelines -> How to sort draw order for different components -> best practices -> documentation
 // Ui, multiple systems to add -> positioning row vs column
-//
+// positions collider vs node vs pbr bundle
+
+
+fn player_death(mut state: ResMut<State<AppState>>, mut contact_events: EventReader<ContactEvent>) {
+    for e in contact_events.iter() {
+        state.set(AppState::game_over());
+    }
+}
