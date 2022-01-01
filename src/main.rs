@@ -3,6 +3,7 @@
 use bevy::app::AppExit;
 use bevy::core::FixedTimestep;
 use bevy::prelude::*;
+use bevy::utils::tracing::Instrument;
 use bevy_rapier3d::prelude::*;
 use rand::{thread_rng, Rng};
 
@@ -15,6 +16,9 @@ struct ActionButton(Actions);
 struct MenuItem;
 struct GameOver;
 struct GameComponent;
+
+#[derive(Debug)]
+struct CanKillPlayer;
 struct Obstacle;
 struct Camera;
 
@@ -99,7 +103,9 @@ fn main() {
         )
         .add_system_set(
             SystemSet::on_update(AppState::Playing)
-                .with_system(spawn_obstacles.system()),
+                .with_system(spawn_obstacles.system())
+                .with_system(clean_obstacles.system())
+                .with_system(clamp_player_y.system()),
         )
         .add_system_set(
             SystemSet::on_update(AppState::Playing)
@@ -111,6 +117,25 @@ fn main() {
 
 fn pause_physics(mut conf: ResMut<RapierConfiguration>) {
     conf.physics_pipeline_active = false;
+}
+
+fn clamp_player_y(mut query: Query<(&mut RigidBodyVelocity, &Transform), (With<Player>)>) {
+    if let Ok((mut rb, tf)) = query.single_mut() {
+        if tf.translation.y > 7. {
+            rb.linvel.y = -0.1;
+        }
+    }
+}
+
+fn clean_obstacles(
+    mut commands: Commands,
+    query: Query<(Entity, &Transform), (With<Obstacle>)>
+) {
+    for (entity, tf) in query.iter() {
+        if tf.translation.x < -8. {
+            commands.entity(entity).despawn();
+        }
+    }
 }
 
 fn spawn_obstacles(
@@ -132,6 +157,7 @@ fn spawn_obstacles(
     commands
         .spawn()
         .insert(Obstacle)
+        .insert(CanKillPlayer)
         .insert_bundle(PbrBundle {
             mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
             material: materials.add(Color::rgb(0., 0., 0.1).into()),
@@ -176,6 +202,7 @@ fn spawn_obstacles(
     commands
         .spawn()
         .insert(Obstacle)
+        .insert(CanKillPlayer)
         .insert_bundle(PbrBundle {
             mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
             material: materials.add(Color::rgb(0., 0., 1.).into()),
@@ -288,6 +315,7 @@ fn setup_game(
             },
             ..Default::default()
         })
+        .insert(CanKillPlayer)
         .insert(GameComponent);
 
     commands
@@ -463,7 +491,7 @@ fn setup_menu(
 }
 
 // TODO:
-// Ceiling
+// Clean up obstaclees
 // Body rotation
 // Scoring
 
@@ -477,9 +505,16 @@ fn setup_menu(
 // Ui, multiple systems to add -> positioning row vs column
 // positions collider vs node vs pbr bundle
 
-
-fn player_death(mut state: ResMut<State<AppState>>, mut contact_events: EventReader<ContactEvent>) {
+fn player_death(
+    mut state: ResMut<State<AppState>>,
+    mut contact_events: EventReader<ContactEvent>,
+    mut query: Query<(&CanKillPlayer)>,
+) {
     for e in contact_events.iter() {
-        state.set(AppState::game_over());
+        if let ContactEvent::Started(c1, c2) = e {
+            if query.get(c1.entity()).is_ok() || query.get(c2.entity()).is_ok() {
+                state.set(AppState::game_over());
+            }
+        };
     }
 }
