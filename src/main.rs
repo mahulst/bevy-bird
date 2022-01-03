@@ -1,11 +1,10 @@
 #![warn(clippy::all, clippy::pedantic)]
 
 use bevy::app::AppExit;
-use bevy::core::FixedTimestep;
 use bevy::prelude::*;
-use bevy::utils::tracing::Instrument;
+use bevy_rapier3d::na::{Quaternion, UnitQuaternion};
 use bevy_rapier3d::prelude::*;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 
 enum Actions {
     Start,
@@ -105,7 +104,8 @@ fn main() {
             SystemSet::on_update(AppState::Playing)
                 .with_system(spawn_obstacles.system())
                 .with_system(clean_obstacles.system())
-                .with_system(clamp_player_y.system()),
+                .with_system(clamp_player_y.system())
+                .with_system(rotate_player_body.system()),
         )
         .add_system_set(
             SystemSet::on_update(AppState::Playing)
@@ -119,6 +119,17 @@ fn pause_physics(mut conf: ResMut<RapierConfiguration>) {
     conf.physics_pipeline_active = false;
 }
 
+fn rotate_player_body(
+    mut query: Query<(&RigidBodyVelocity, &mut RigidBodyPosition), (With<Player>)>,
+) {
+    for (vel, mut pos) in query.iter_mut() {
+        let rotation_percentage = lerp(-3., 3., vel.linvel.y) * 2.0 -1.;
+
+
+        pos.position.rotation = Quat::from_rotation_z(rotation_percentage).into();
+    }
+}
+
 fn clamp_player_y(mut query: Query<(&mut RigidBodyVelocity, &Transform), (With<Player>)>) {
     if let Ok((mut rb, tf)) = query.single_mut() {
         if tf.translation.y > 7. {
@@ -127,10 +138,7 @@ fn clamp_player_y(mut query: Query<(&mut RigidBodyVelocity, &Transform), (With<P
     }
 }
 
-fn clean_obstacles(
-    mut commands: Commands,
-    query: Query<(Entity, &Transform), (With<Obstacle>)>
-) {
+fn clean_obstacles(mut commands: Commands, query: Query<(Entity, &Transform), (With<Obstacle>)>) {
     for (entity, tf) in query.iter() {
         if tf.translation.x < -8. {
             commands.entity(entity).despawn();
@@ -170,6 +178,9 @@ fn spawn_obstacles(
         .insert(GameComponent)
         .insert_bundle(RigidBodyBundle {
             body_type: RigidBodyType::Dynamic,
+            mass_properties: (RigidBodyMassPropsFlags::ROTATION_LOCKED_X
+                | RigidBodyMassPropsFlags::ROTATION_LOCKED_Y)
+                .into(),
             velocity: RigidBodyVelocity {
                 linvel: Vec3::new(-2., 0., 0.).into(),
                 ..Default::default()
@@ -268,8 +279,7 @@ fn setup_game(
         .insert(GameComponent)
         .insert_bundle(RigidBodyBundle {
             body_type: RigidBodyType::Dynamic,
-            position: Vec3::new(-2.0, 5., 0.0).into(),
-
+            position: (Vec3::new(-2.0, 5., 0.0)).into(),
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
@@ -491,8 +501,6 @@ fn setup_menu(
 }
 
 // TODO:
-// Clean up obstaclees
-// Body rotation
 // Scoring
 
 // Optional:
@@ -509,12 +517,36 @@ fn player_death(
     mut state: ResMut<State<AppState>>,
     mut contact_events: EventReader<ContactEvent>,
     mut query: Query<(&CanKillPlayer)>,
+    mut player_query: Query<(&mut RigidBodyMassProps), (With<Player>)>,
 ) {
     for e in contact_events.iter() {
         if let ContactEvent::Started(c1, c2) = e {
             if query.get(c1.entity()).is_ok() || query.get(c2.entity()).is_ok() {
+
+                // Ragdoll mode for player, unlock rotations
+                if let Ok(mut mp) = player_query.single_mut() {
+                    mp.flags = RigidBodyMassPropsFlags::empty();
+                }
+
                 state.set(AppState::game_over());
             }
         };
+    }
+}
+
+pub fn lerp(min: f32, max: f32, value: f32) -> f32 {
+    let diff = max - min;
+
+    (value - min) / diff
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lerp;
+
+    #[test]
+    fn test_lerp() {
+        assert_eq!(lerp(-3., 3., 0.,), 0.5);
+        assert_eq!(lerp(0., 30., 6.,), 0.2);
     }
 }
