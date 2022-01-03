@@ -1,4 +1,9 @@
-# BEVY Bird
+# BEVY Bir
+Flappy bird clone in bevy
+
+![alt text][screenshot]
+
+[screenshot]: https://raw.githubusercontent.com/mahulst/bevy-bird/master/docs/example.gif "Example gif"
 
 ## build for web:
 ```bash
