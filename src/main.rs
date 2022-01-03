@@ -3,14 +3,15 @@
 use bevy::app::AppExit;
 use bevy::prelude::*;
 use bevy_rapier3d::na::{Quaternion, UnitQuaternion};
+use bevy_rapier3d::physics;
+use bevy_rapier3d::physics::PhysicsStages;
 use bevy_rapier3d::prelude::*;
-use rand::{Rng, thread_rng};
+use rand::{thread_rng, Rng};
 
 enum Actions {
     Start,
     Exit,
 }
-struct LastObstacleSpawned(f64);
 struct ActionButton(Actions);
 struct MenuItem;
 struct GameOver;
@@ -20,6 +21,10 @@ struct GameComponent;
 struct CanKillPlayer;
 struct Obstacle;
 struct Camera;
+
+struct Score(u32);
+struct ScoreTrigger(bool);
+struct ScoreText;
 
 struct ButtonMaterials {
     normal: Handle<ColorMaterial>,
@@ -64,11 +69,14 @@ struct Velocity(Vec2);
 
 const GRAVITY: f32 = 3.1;
 const FLY_SPEED: f32 = 2.;
+const OBSTACLE_MOVEMENT_SPEED: f32 = -2.;
+const OBSTACLE_DISTANCE: f32 = 4.;
+const OBSTACLE_SPAWN_X: f32 = 8.;
 const MAX_FLY_SPEED: f32 = 2.8;
 
 fn main() {
     App::build()
-        .insert_resource(LastObstacleSpawned(0.))
+        .insert_resource(Score(0))
         .insert_resource(WindowDescriptor {
             vsync: false,
             ..Default::default()
@@ -81,7 +89,8 @@ fn main() {
         })
         .init_resource::<ButtonMaterials>()
         .add_plugin(RapierRenderPlugin)
-        .add_state(AppState::restart())
+        .add_state_to_stage(CoreStage::Update, AppState::restart())
+        .add_state_to_stage(CoreStage::PostUpdate, AppState::restart())
         .add_system(bevy::input::system::exit_on_esc_system.system())
         .add_system(menu.system())
         .add_startup_system(setup_camera.system())
@@ -100,10 +109,15 @@ fn main() {
                 .with_system(setup_game.system())
                 .with_system(close_menu.system()),
         )
+        .add_system_set_to_stage(
+            CoreStage::PostUpdate,
+            SystemSet::on_update(AppState::Playing).with_system(spawn_obstacles.system()),
+        )
         .add_system_set(
             SystemSet::on_update(AppState::Playing)
-                .with_system(spawn_obstacles.system())
                 .with_system(clean_obstacles.system())
+                .with_system(count_score.system())
+                .with_system(update_score.system())
                 .with_system(clamp_player_y.system())
                 .with_system(rotate_player_body.system()),
         )
@@ -123,8 +137,7 @@ fn rotate_player_body(
     mut query: Query<(&RigidBodyVelocity, &mut RigidBodyPosition), (With<Player>)>,
 ) {
     for (vel, mut pos) in query.iter_mut() {
-        let rotation_percentage = lerp(-3., 3., vel.linvel.y) * 2.0 -1.;
-
+        let rotation_percentage = lerp(-3., 3., vel.linvel.y) * 2.0 - 1.;
 
         pos.position.rotation = Quat::from_rotation_z(rotation_percentage).into();
     }
@@ -138,6 +151,16 @@ fn clamp_player_y(mut query: Query<(&mut RigidBodyVelocity, &Transform), (With<P
     }
 }
 
+fn count_score(mut query: Query<(&Transform, &mut ScoreTrigger)>, mut score: ResMut<Score>) {
+    // println!("{}",  score.0);
+    for ((tf, mut score_trigger)) in query.iter_mut() {
+        if score_trigger.0 && tf.translation.x < -2.5 {
+            score.0 += 1;
+            score_trigger.0 = false;
+        }
+    }
+}
+
 fn clean_obstacles(mut commands: Commands, query: Query<(Entity, &Transform), (With<Obstacle>)>) {
     for (entity, tf) in query.iter() {
         if tf.translation.x < -8. {
@@ -147,113 +170,111 @@ fn clean_obstacles(mut commands: Commands, query: Query<(Entity, &Transform), (W
 }
 
 fn spawn_obstacles(
-    time: Res<Time>,
-    mut last_spawn: ResMut<LastObstacleSpawned>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    query: Query<(&Transform), (With<ScoreTrigger>)>,
 ) {
-    let now = time.seconds_since_startup();
-    if now < last_spawn.0 + 2. {
-        return;
+    let closest_obstacle: f32 = query
+        .iter()
+        .fold(f32::MIN, |acc, tf| acc.max(tf.translation.x));
+    if (closest_obstacle - OBSTACLE_SPAWN_X).abs() > OBSTACLE_DISTANCE {
+        let mut rng = thread_rng();
+        let y = rng.gen_range(0.0..4.0) as f32;
+        commands
+            .spawn()
+            .insert(Obstacle)
+            .insert(ScoreTrigger(true))
+            .insert(CanKillPlayer)
+            .insert_bundle(PbrBundle {
+                mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
+                material: materials.add(Color::rgb(0., 0., 0.1).into()),
+                transform: Transform {
+                    scale: Vec3::new(1., 8., 1.),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .insert(GameComponent)
+            .insert_bundle(RigidBodyBundle {
+                body_type: RigidBodyType::Dynamic,
+                position: Vec3::new(OBSTACLE_SPAWN_X, 7. + y, 0.).into(),
+                mass_properties: (RigidBodyMassPropsFlags::ROTATION_LOCKED_X
+                    | RigidBodyMassPropsFlags::ROTATION_LOCKED_Y)
+                    .into(),
+                velocity: RigidBodyVelocity {
+                    linvel: Vec3::new(OBSTACLE_MOVEMENT_SPEED, 0., 0.).into(),
+                    ..Default::default()
+                },
+                forces: RigidBodyForces {
+                    gravity_scale: 0.,
+                    ..Default::default()
+                },
+                damping: RigidBodyDamping {
+                    linear_damping: 0.,
+                    angular_damping: 0.,
+                },
+                ..Default::default()
+            })
+            .insert_bundle(ColliderBundle {
+                shape: ColliderShape::cuboid(0.5, 4., 0.5),
+                flags: ColliderFlags {
+                    active_events: ActiveEvents::CONTACT_EVENTS,
+                    collision_groups: InteractionGroups {
+                        memberships: 8,
+                        filter: 4,
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .insert(ColliderPositionSync::Discrete);
+
+        commands
+            .spawn()
+            .insert(Obstacle)
+            .insert(CanKillPlayer)
+            .insert_bundle(PbrBundle {
+                mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
+                material: materials.add(Color::rgb(0., 0., 1.).into()),
+                transform: Transform {
+                    scale: Vec3::new(1., 6., 1.),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .insert_bundle(RigidBodyBundle {
+                body_type: RigidBodyType::Dynamic,
+                position: Vec3::new(OBSTACLE_SPAWN_X, -1. + y, 0.).into(),
+                velocity: RigidBodyVelocity {
+                    linvel: Vec3::new(OBSTACLE_MOVEMENT_SPEED, 0., 0.).into(),
+                    ..Default::default()
+                },
+                forces: RigidBodyForces {
+                    gravity_scale: 0.,
+                    ..Default::default()
+                },
+                damping: RigidBodyDamping {
+                    linear_damping: 0.,
+                    angular_damping: 0.,
+                },
+                ..Default::default()
+            })
+            .insert(GameComponent)
+            .insert_bundle(ColliderBundle {
+                shape: ColliderShape::cuboid(0.5, 3., 0.5),
+                flags: ColliderFlags {
+                    active_events: ActiveEvents::CONTACT_EVENTS,
+                    collision_groups: InteractionGroups {
+                        memberships: 8,
+                        filter: 4,
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .insert(ColliderPositionSync::Discrete);
     }
-
-    last_spawn.0 = now;
-
-    let mut rng = thread_rng();
-    let y = rng.gen_range(0.0..4.0) as f32;
-    commands
-        .spawn()
-        .insert(Obstacle)
-        .insert(CanKillPlayer)
-        .insert_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
-            material: materials.add(Color::rgb(0., 0., 0.1).into()),
-            transform: Transform {
-                scale: Vec3::new(1., 8., 1.),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert(GameComponent)
-        .insert_bundle(RigidBodyBundle {
-            body_type: RigidBodyType::Dynamic,
-            mass_properties: (RigidBodyMassPropsFlags::ROTATION_LOCKED_X
-                | RigidBodyMassPropsFlags::ROTATION_LOCKED_Y)
-                .into(),
-            velocity: RigidBodyVelocity {
-                linvel: Vec3::new(-2., 0., 0.).into(),
-                ..Default::default()
-            },
-            forces: RigidBodyForces {
-                gravity_scale: 0.,
-                ..Default::default()
-            },
-            damping: RigidBodyDamping {
-                linear_damping: 0.,
-                angular_damping: 0.,
-            },
-            position: Vec3::new(9., 7. + y, 0.).into(),
-            ..Default::default()
-        })
-        .insert_bundle(ColliderBundle {
-            shape: ColliderShape::cuboid(0.5, 4., 0.5),
-            flags: ColliderFlags {
-                active_events: ActiveEvents::CONTACT_EVENTS,
-                collision_groups: InteractionGroups {
-                    memberships: 8,
-                    filter: 4,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert(ColliderPositionSync::Discrete);
-
-    commands
-        .spawn()
-        .insert(Obstacle)
-        .insert(CanKillPlayer)
-        .insert_bundle(PbrBundle {
-            mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 1. })),
-            material: materials.add(Color::rgb(0., 0., 1.).into()),
-            transform: Transform {
-                scale: Vec3::new(1., 6., 1.),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert_bundle(RigidBodyBundle {
-            body_type: RigidBodyType::Dynamic,
-            velocity: RigidBodyVelocity {
-                linvel: Vec3::new(-2., 0., 0.).into(),
-                ..Default::default()
-            },
-            forces: RigidBodyForces {
-                gravity_scale: 0.,
-                ..Default::default()
-            },
-            damping: RigidBodyDamping {
-                linear_damping: 0.,
-                angular_damping: 0.,
-            },
-            position: Vec3::new(9., -1. + y, 0.).into(),
-            ..Default::default()
-        })
-        .insert(GameComponent)
-        .insert_bundle(ColliderBundle {
-            shape: ColliderShape::cuboid(0.5, 3., 0.5),
-            flags: ColliderFlags {
-                active_events: ActiveEvents::CONTACT_EVENTS,
-                collision_groups: InteractionGroups {
-                    memberships: 8,
-                    filter: 4,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .insert(ColliderPositionSync::Discrete);
 }
 
 fn fly(input: Res<Input<KeyCode>>, mut query: Query<(&mut RigidBodyVelocity), (With<Player>)>) {
@@ -264,11 +285,51 @@ fn fly(input: Res<Input<KeyCode>>, mut query: Query<(&mut RigidBodyVelocity), (W
     }
 }
 
+fn update_score(mut query: Query<(&mut Text), (With<ScoreText>)>, score: Res<Score>) {
+    if let Ok(mut text) = query.single_mut() {
+        text.sections[0].value = score.0.to_string();
+    }
+}
+
 fn setup_game(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+    mut score: ResMut<Score>,
 ) {
+    score.0 = 0;
+
+    commands.spawn_bundle(UiCameraBundle::default());
+    commands
+        .spawn_bundle(TextBundle {
+            text: Text::with_section(
+                "0",
+                TextStyle {
+                    font: asset_server.load("fonts/FiraSans-Bold.ttf"),
+                    font_size: 80.0,
+                    color: Color::rgb(0.9, 0.9, 0.9),
+                    ..Default::default()
+                },
+                TextAlignment {
+                    horizontal: HorizontalAlign::Right,
+                    ..Default::default()
+                },
+            ),
+            style: Style {
+                position_type: PositionType::Absolute,
+                position: Rect {
+                    top: Val::Px(5.0),
+                    right: Val::Percent(5.),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .insert(GameComponent)
+        .insert(ScoreText);
+
     commands
         .spawn_bundle(PbrBundle {
             mesh: meshes.add(Mesh::from(bevy::prelude::shape::Cube { size: 0.1 })),
@@ -295,8 +356,7 @@ fn setup_game(
             ..Default::default()
         })
         .insert(ColliderPositionSync::Discrete)
-        .insert(Velocity(Vec2::new(0., 0.)))
-        .insert(ColliderDebugRender::with_id(2));
+        .insert(Velocity(Vec2::new(0., 0.)));
 
     commands
         .spawn_bundle(PbrBundle {
@@ -501,7 +561,6 @@ fn setup_menu(
 }
 
 // TODO:
-// Scoring
 
 // Optional:
 // iOS
@@ -522,7 +581,6 @@ fn player_death(
     for e in contact_events.iter() {
         if let ContactEvent::Started(c1, c2) = e {
             if query.get(c1.entity()).is_ok() || query.get(c2.entity()).is_ok() {
-
                 // Ragdoll mode for player, unlock rotations
                 if let Ok(mut mp) = player_query.single_mut() {
                     mp.flags = RigidBodyMassPropsFlags::empty();
