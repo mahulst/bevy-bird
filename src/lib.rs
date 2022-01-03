@@ -573,16 +573,6 @@ fn setup_menu(
         .insert(MenuItem);
 }
 
-// TODO:
-
-// Optional:
-// High scores
-// Sound
-
-// Questions:
-// Render pipelines -> How to sort draw order for different components -> best practices -> documentation
-// Ui, multiple systems to add -> positioning row vs column
-// positions collider vs node vs pbr bundle
 
 fn player_death(
     mut state: ResMut<State<AppState>>,
@@ -612,7 +602,7 @@ pub fn lerp(min: f32, max: f32, value: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use crate::lerp;
+    use super::lerp;
 
     #[test]
     fn test_lerp() {
