@@ -1,9 +1,5 @@
-pub mod lib;
-pub mod obstacles;
-pub mod player;
-pub mod prelude;
-pub mod ui;
+use bevy_bird::run;
 
 fn main() {
-    lib::run();
+    run();
 }

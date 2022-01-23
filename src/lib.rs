@@ -9,14 +9,10 @@ use crate::player::{
 use crate::prelude::*;
 use crate::ui::{close_menu, display_game_over, menu, setup_menu, update_score};
 
-#[path = "./obstacles.rs"]
-mod obstacles;
-#[path = "./player.rs"]
-mod player;
-#[path = "./prelude.rs"]
-mod prelude;
-#[path = "./ui.rs"]
-mod ui;
+pub mod obstacles;
+pub mod player;
+pub mod prelude;
+pub mod ui;
 
 const GRAVITY: f32 = 12.8;
 
