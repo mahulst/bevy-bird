@@ -7,13 +7,13 @@ pub fn player_death(
     mut state: ResMut<State<AppState>>,
     mut contact_events: EventReader<ContactEvent>,
     mut query: Query<(&CanKillPlayer)>,
-    mut player_query: Query<(&mut RigidBodyMassProps), (With<Player>)>,
+    mut player_query: Query<(&mut RigidBodyMassPropsComponent), (With<Player>)>,
 ) {
     for e in contact_events.iter() {
         if let ContactEvent::Started(c1, c2) = e {
             if query.get(c1.entity()).is_ok() || query.get(c2.entity()).is_ok() {
                 // Ragdoll mode for player, unlock rotations
-                if let Ok(mut mp) = player_query.single_mut() {
+                if let mut mp = player_query.single_mut() {
                     mp.flags = RigidBodyMassPropsFlags::empty();
                 }
 
@@ -24,7 +24,7 @@ pub fn player_death(
 }
 
 pub fn rotate_player_body(
-    mut query: Query<(&RigidBodyVelocity, &mut RigidBodyPosition), (With<Player>)>,
+    mut query: Query<(&RigidBodyVelocityComponent, &mut RigidBodyPositionComponent), (With<Player>)>,
 ) {
     for (vel, mut pos) in query.iter_mut() {
         let rotation_percentage = lerp(-3., 3., vel.linvel.y) * 2.0 - 1.;
@@ -33,15 +33,15 @@ pub fn rotate_player_body(
     }
 }
 
-pub fn clamp_player_y(mut query: Query<(&mut RigidBodyVelocity, &Transform), (With<Player>)>) {
-    if let Ok((mut rb, tf)) = query.single_mut() {
+pub fn clamp_player_y(mut query: Query<(&mut RigidBodyVelocityComponent, &Transform), (With<Player>)>) {
+    if let (mut rb, tf) = query.single_mut() {
         if tf.translation.y > 7. {
             rb.linvel.y = -0.1;
         }
     }
 }
 
-pub fn fly(input: Res<Input<KeyCode>>, mut query: Query<(&mut RigidBodyVelocity), (With<Player>)>) {
+pub fn fly(input: Res<Input<KeyCode>>, mut query: Query<(&mut RigidBodyVelocityComponent), (With<Player>)>) {
     if input.just_pressed(KeyCode::Space) {
         for (mut velocity) in query.iter_mut() {
             velocity.linvel.y = MAX_FLY_SPEED.min(velocity.linvel.y.max(0.) + FLY_SPEED);
@@ -106,7 +106,7 @@ pub fn setup_game(
         .insert(Player)
         .insert(GameComponent)
         .insert_bundle(RigidBodyBundle {
-            body_type: RigidBodyType::Dynamic,
+            body_type: RigidBodyType::Dynamic.into(),
             position: (Vec3::new(-2.0, 5., 0.0)).into(),
             ..Default::default()
         })
@@ -118,8 +118,8 @@ pub fn setup_game(
                     filter: 10,
                 },
                 ..Default::default()
-            },
-            shape: ColliderShape::cuboid(0.05, 0.05, 0.05),
+            }.into(),
+            shape: ColliderShape::cuboid(0.05, 0.05, 0.05).into(),
             ..Default::default()
         })
         .insert(ColliderPositionSync::Discrete);
@@ -136,26 +136,26 @@ pub fn setup_game(
             ..Default::default()
         })
         .insert_bundle(RigidBodyBundle {
-            body_type: RigidBodyType::Static,
+            body_type: RigidBodyType::Static.into(),
             position: Vec3::new(-0.0, -0.5, 0.0).into(),
             ..Default::default()
         })
         .insert_bundle(ColliderBundle {
-            shape: ColliderShape::cuboid(64., 0.5, 64.),
+            shape: ColliderShape::cuboid(64., 0.5, 64.).into(),
             flags: ColliderFlags {
                 collision_groups: InteractionGroups {
                     memberships: 2,
                     filter: 1,
                 },
                 ..Default::default()
-            },
+            }.into(),
             ..Default::default()
         })
         .insert(CanKillPlayer)
         .insert(GameComponent);
 
     commands
-        .spawn_bundle(LightBundle {
+        .spawn_bundle(DirectionalLightBundle {
             transform: Transform::from_xyz(4.0, 8.0, 4.0),
             ..Default::default()
         })

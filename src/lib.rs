@@ -1,12 +1,13 @@
 #![warn(clippy::all, clippy::pedantic)]
 
+use wasm_bindgen::prelude::wasm_bindgen;
 use crate::obstacles::{clean, spawn, stop};
 use crate::player::{
     clamp_player_y, clean_up_previous_game, count_score, fly, player_death, rotate_player_body,
     setup_camera, setup_game,
 };
 use crate::prelude::*;
-use crate::ui::{close_menu, display_game_over, menu, setup_menu, update_score, ButtonMaterials};
+use crate::ui::{close_menu, display_game_over, menu, setup_menu, update_score};
 
 #[path = "./obstacles.rs"]
 mod obstacles;
@@ -21,13 +22,10 @@ const GRAVITY: f32 = 12.8;
 
 #[wasm_bindgen]
 pub fn run() {
-    let mut app = App::build();
+    let mut app = App::new();
 
     app.add_plugins(DefaultPlugins);
 
-    // when building for Web, use WebGL2 rendering
-    #[cfg(target_arch = "wasm32")]
-    app.add_plugin(bevy_webgl2::WebGL2Plugin);
 
     app.insert_resource(Score(0))
         .insert_resource(WindowDescriptor {
@@ -39,7 +37,6 @@ pub fn run() {
             gravity: -Vector::y() * GRAVITY,
             ..Default::default()
         })
-        .init_resource::<ButtonMaterials>()
         .add_plugin(RapierRenderPlugin)
         .add_state_to_stage(CoreStage::Update, AppState::restart())
         .add_state_to_stage(CoreStage::PostUpdate, AppState::restart())

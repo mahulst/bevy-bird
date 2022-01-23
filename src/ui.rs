@@ -2,22 +2,7 @@ use bevy::app::AppExit;
 
 use crate::prelude::*;
 
-pub struct ButtonMaterials {
-    normal: Handle<ColorMaterial>,
-    hovered: Handle<ColorMaterial>,
-    pressed: Handle<ColorMaterial>,
-}
-
-impl FromWorld for ButtonMaterials {
-    fn from_world(world: &mut World) -> Self {
-        let mut materials = world.get_resource_mut::<Assets<ColorMaterial>>().unwrap();
-        ButtonMaterials {
-            normal: materials.add(Color::rgb(0.15, 0.15, 0.15).into()),
-            hovered: materials.add(Color::rgb(0.25, 0.25, 0.25).into()),
-            pressed: materials.add(Color::rgb(0.35, 0.75, 0.35).into()),
-        }
-    }
-}
+const NORMAL_BUTTON: Color = Color::rgb(0.15, 0.15, 0.15);
 
 pub fn close_menu(
     mut commands: Commands,
@@ -29,12 +14,10 @@ pub fn close_menu(
 }
 
 pub fn menu(
-    button_materials: Res<ButtonMaterials>,
     mut state: ResMut<State<AppState>>,
     mut query: Query<
         (
             &Interaction,
-            &mut Handle<ColorMaterial>,
             &Children,
             &ActionButton,
         ),
@@ -43,8 +26,7 @@ pub fn menu(
     mut text_query: Query<&mut Text>,
     mut app_exit_events: EventWriter<AppExit>,
 ) {
-    for (interaction, mut material, children, action) in query.iter_mut() {
-        let mut text = text_query.get_mut(children[0]).expect("Get button text");
+    for (interaction, children, action) in query.iter_mut() {
         match *interaction {
             Interaction::Clicked => match *action {
                 ActionButton(Actions::Start) => {
@@ -91,22 +73,21 @@ pub fn display_game_over(mut commands: Commands, asset_server: Res<AssetServer>)
         .insert(GameOver);
 }
 
-pub fn setup_menu(
-    mut commands: Commands,
-    button_materials: Res<ButtonMaterials>,
-    asset_server: Res<AssetServer>,
-) {
+pub fn setup_menu(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn_bundle(UiCameraBundle::default());
     commands
         .spawn_bundle(ButtonBundle {
             style: Style {
-                size: Size::new(Val::Px(150.), Val::Px(65.0)),
+                size: Size::new(Val::Px(150.0), Val::Px(65.0)),
+                // center button
                 margin: Rect::all(Val::Auto),
+                // horizontally center child text
                 justify_content: JustifyContent::Center,
+                // vertically center child text
                 align_items: AlignItems::Center,
                 ..Default::default()
             },
-            material: button_materials.normal.clone(),
+            color: NORMAL_BUTTON.into(),
             ..Default::default()
         })
         .with_children(|parent| {
@@ -130,13 +111,16 @@ pub fn setup_menu(
     commands
         .spawn_bundle(ButtonBundle {
             style: Style {
-                size: Size::new(Val::Px(150.), Val::Px(65.0)),
+                size: Size::new(Val::Px(150.0), Val::Px(65.0)),
+                // center button
                 margin: Rect::all(Val::Auto),
+                // horizontally center child text
                 justify_content: JustifyContent::Center,
+                // vertically center child text
                 align_items: AlignItems::Center,
                 ..Default::default()
             },
-            material: button_materials.normal.clone(),
+            color: NORMAL_BUTTON.into(),
             ..Default::default()
         })
         .with_children(|parent| {
@@ -159,7 +143,7 @@ pub fn setup_menu(
 }
 
 pub fn update_score(mut query: Query<(&mut Text), (With<ScoreText>)>, score: Res<Score>) {
-    if let Ok(mut text) = query.single_mut() {
+    if let mut text = query.single_mut() {
         text.sections[0].value = score.0.to_string();
     }
 }
